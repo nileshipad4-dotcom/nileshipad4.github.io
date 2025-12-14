@@ -2,6 +2,7 @@ import time
 import tls_client
 import pandas as pd
 import streamlit as st
+import requests
 
 EXPIRY = "16-Dec-2025"
 REFRESH_SECONDS = 30
@@ -10,8 +11,9 @@ st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
 
 
 # -----------------------------
-# TLS session
+# Create & cache TLS session
 # -----------------------------
+@st.cache_resource
 def get_session():
     session = tls_client.Session(
         client_identifier="chrome_120",
@@ -24,7 +26,11 @@ def get_session():
             "Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/option-chain"
     })
+
+    # Initial cookie hit
+    session.get("https://www.nseindia.com", timeout=10)
     return session
 
 
@@ -34,11 +40,19 @@ def get_session():
 @st.cache_data(ttl=REFRESH_SECONDS)
 def fetch_nifty_data():
     session = get_session()
-    session.get("https://www.nseindia.com")
-    time.sleep(1)
 
     url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
-    data = session.get(url).json()
+
+    try:
+        r = session.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+
+    except Exception:
+        # Force cookie refresh once
+        session.get("https://www.nseindia.com", timeout=10)
+        r = session.get(url, timeout=10)
+        data = r.json()
 
     spot = data["records"]["underlyingValue"]
 
@@ -85,26 +99,26 @@ def fetch_nifty_data():
 # UI
 # -----------------------------
 st.title("📊 NIFTY Option Chain")
-
 st.write(f"**Expiry:** {EXPIRY}")
 
-spot, pcr_oi, pcr_vol, df = fetch_nifty_data()
+try:
+    spot, pcr_oi, pcr_vol, df = fetch_nifty_data()
 
-c1, c2, c3 = st.columns(3)
-c1.metric("NIFTY Spot", spot)
-c2.metric("Put / Call OI", pcr_oi)
-c3.metric("Put / Call Volume", pcr_vol)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("NIFTY Spot", spot)
+    c2.metric("Put / Call OI", pcr_oi)
+    c3.metric("Put / Call Volume", pcr_vol)
 
-st.divider()
+    st.divider()
+    st.dataframe(df, use_container_width=True, height=600)
 
-st.dataframe(
-    df,
-    use_container_width=True,
-    height=600
-)
+except Exception as e:
+    st.error("NSE data not available right now. Retrying...")
+    st.stop()
 
 st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
 
-# Auto refresh
-time.sleep(REFRESH_SECONDS)
-st.rerun()
+# -----------------------------
+# Auto refresh (non-blocking)
+# -----------------------------
+st.experimental_rerun()
