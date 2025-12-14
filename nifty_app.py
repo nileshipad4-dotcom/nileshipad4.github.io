@@ -1,5 +1,5 @@
 import time
-import tls_client
+import requests
 import pandas as pd
 import streamlit as st
 
@@ -10,14 +10,11 @@ st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
 
 
 # ---------------------------------
-# Create persistent TLS session
+# Create session with cookies
 # ---------------------------------
 @st.cache_resource
 def get_session():
-    session = tls_client.Session(
-        client_identifier="chrome_120",
-        random_tls_extension_order=True
-    )
+    session = requests.Session()
     session.headers.update({
         "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -27,8 +24,6 @@ def get_session():
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.nseindia.com/option-chain"
     })
-
-    # Initial cookie request
     session.get("https://www.nseindia.com", timeout=10)
     return session
 
@@ -39,7 +34,6 @@ def get_session():
 @st.cache_data(ttl=REFRESH_SECONDS)
 def fetch_nifty_data():
     session = get_session()
-
     url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
 
     try:
@@ -47,7 +41,6 @@ def fetch_nifty_data():
         r.raise_for_status()
         data = r.json()
     except Exception:
-        # refresh cookies once
         session.get("https://www.nseindia.com", timeout=10)
         r = session.get(url, timeout=10)
         data = r.json()
@@ -55,8 +48,8 @@ def fetch_nifty_data():
     spot = data["records"]["underlyingValue"]
 
     rows = []
-    ce_oi_total = pe_oi_total = 0
-    ce_vol_total = pe_vol_total = 0
+    ce_oi = pe_oi = 0
+    ce_vol = pe_vol = 0
 
     for item in data["records"]["data"]:
         if item.get("expiryDate") != EXPIRY:
@@ -65,28 +58,23 @@ def fetch_nifty_data():
         ce = item.get("CE", {})
         pe = item.get("PE", {})
 
-        ce_oi = ce.get("openInterest", 0)
-        pe_oi = pe.get("openInterest", 0)
-        ce_vol = ce.get("totalTradedVolume", 0)
-        pe_vol = pe.get("totalTradedVolume", 0)
-
-        ce_oi_total += ce_oi
-        pe_oi_total += pe_oi
-        ce_vol_total += ce_vol
-        pe_vol_total += pe_vol
+        ce_oi += ce.get("openInterest", 0)
+        pe_oi += pe.get("openInterest", 0)
+        ce_vol += ce.get("totalTradedVolume", 0)
+        pe_vol += pe.get("totalTradedVolume", 0)
 
         rows.append({
             "Strike": item["strikePrice"],
             "CE LTP": ce.get("lastPrice"),
-            "CE OI": ce_oi,
-            "CE Volume": ce_vol,
+            "CE OI": ce.get("openInterest"),
+            "CE Volume": ce.get("totalTradedVolume"),
             "PE LTP": pe.get("lastPrice"),
-            "PE OI": pe_oi,
-            "PE Volume": pe_vol,
+            "PE OI": pe.get("openInterest"),
+            "PE Volume": pe.get("totalTradedVolume"),
         })
 
-    pcr_oi = round(pe_oi_total / ce_oi_total, 2) if ce_oi_total else 0
-    pcr_vol = round(pe_vol_total / ce_vol_total, 2) if ce_vol_total else 0
+    pcr_oi = round(pe_oi / ce_oi, 2) if ce_oi else 0
+    pcr_vol = round(pe_vol / ce_vol, 2) if ce_vol else 0
 
     df = pd.DataFrame(rows).sort_values("Strike")
 
@@ -104,18 +92,5 @@ try:
 
     c1, c2, c3 = st.columns(3)
     c1.metric("NIFTY Spot", spot)
-    c2.metric("Put / Call OI", pcr_oi)
-    c3.metric("Put / Call Volume", pcr_vol)
+    c2.metric("Put / C
 
-    st.divider()
-    st.dataframe(df, use_container_width=True, height=600)
-
-except Exception:
-    st.error("NSE data unavailable. Please refresh.")
-    st.stop()
-
-st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
-
-# Auto refresh
-time.sleep(REFRESH_SECONDS)
-st.rerun()
