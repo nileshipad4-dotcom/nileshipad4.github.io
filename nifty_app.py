@@ -9,9 +9,6 @@ REFRESH_SECONDS = 30
 st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
 
 
-# ---------------------------------
-# Create session with cookies
-# ---------------------------------
 @st.cache_resource
 def get_session():
     session = requests.Session()
@@ -28,9 +25,6 @@ def get_session():
     return session
 
 
-# ---------------------------------
-# Fetch NIFTY option chain
-# ---------------------------------
 @st.cache_data(ttl=REFRESH_SECONDS)
 def fetch_nifty_data():
     session = get_session()
@@ -81,9 +75,6 @@ def fetch_nifty_data():
     return spot, pcr_oi, pcr_vol, df
 
 
-# ---------------------------------
-# UI
-# ---------------------------------
 st.title("📊 NIFTY Option Chain")
 st.write(f"**Expiry:** {EXPIRY}")
 
@@ -92,5 +83,17 @@ try:
 
     c1, c2, c3 = st.columns(3)
     c1.metric("NIFTY Spot", spot)
-    c2.metric("Put / C
+    c2.metric("Put / Call OI", pcr_oi)
+    c3.metric("Put / Call Volume", pcr_vol)
 
+    st.divider()
+    st.dataframe(df, use_container_width=True, height=600)
+
+except Exception:
+    st.error("NSE data unavailable or blocked.")
+    st.stop()
+
+st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
+
+time.sleep(REFRESH_SECONDS)
+st.rerun()
