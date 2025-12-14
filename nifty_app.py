@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-EXPIRY = "30-Dec-2025"
+EXPIRY = "16-Dec-2025"
 REFRESH_SECONDS = 30
 
 st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
@@ -28,7 +28,7 @@ def get_session():
 @st.cache_data(ttl=REFRESH_SECONDS)
 def fetch_nifty_data():
     session = get_session()
-    url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+    url = "https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY&expiry=16-Dec-2025"
 
     try:
         r = session.get(url, timeout=10)
@@ -97,4 +97,5 @@ st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
 
 time.sleep(REFRESH_SECONDS)
 st.rerun()
+
 
