@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-EXPIRY = "16-Dec-2025"
+EXPIRY = "30-Dec-2025"
 REFRESH_SECONDS = 30
 
 st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
@@ -97,3 +97,4 @@ st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
 
 time.sleep(REFRESH_SECONDS)
 st.rerun()
+
