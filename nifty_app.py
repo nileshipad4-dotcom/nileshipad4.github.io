@@ -1,20 +1,33 @@
-import time
-import requests
+import tls_client
 import pandas as pd
+import time
 import streamlit as st
 
-EXPIRY = "16-Dec-2025"
-REFRESH_SECONDS = 30
+# =============================
+# CONFIG
+# =============================
+EXPIRIES = ["16-Dec-2025", "30-Dec-2025"]
+REFRESH_SECONDS = 300
 
-st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
+
+# =============================
+# Streamlit Page Config
+# =============================
+st.set_page_config(
+    page_title="NIFTY Option Chain",
+    layout="wide"
+)
 
 
-# --------------------------------
-# Create session + cookies
-# --------------------------------
+# =============================
+# Create ONE TLS Session
+# =============================
 @st.cache_resource
-def get_session():
-    session = requests.Session()
+def create_session():
+    session = tls_client.Session(
+        client_identifier="chrome_120",
+        random_tls_extension_order=True
+    )
 
     session.headers.update({
         "User-Agent":
@@ -23,104 +36,101 @@ def get_session():
             "Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/option-chain",
-        "Connection": "keep-alive",
-        "Host": "www.nseindia.com"
+        "Referer": "https://www.nseindia.com/option-chain"
     })
 
-    # 🔑 Warm up cookies (CRITICAL)
-    session.get("https://www.nseindia.com", timeout=10)
+    # Warm cookies once
+    session.get("https://www.nseindia.com")
+    time.sleep(1)
 
     return session
 
 
-# --------------------------------
-# Fetch NIFTY option chain
-# --------------------------------
+# =============================
+# Fetch NIFTY Option Chain (V3)
+# =============================
 @st.cache_data(ttl=REFRESH_SECONDS)
-def fetch_nifty_data():
-    session = get_session()
+def fetch_nifty_option_chain(expiry):
+
+    session = create_session()
 
     url = (
         "https://www.nseindia.com/api/option-chain-v3"
-        "?type=Indices&symbol=NIFTY&expiry=16-Dec-2025"
+        f"?type=Indices&symbol=NIFTY&expiry={expiry}"
     )
-
-    def _fetch():
-        r = session.get(url, timeout=10)
-        if "application/json" not in r.headers.get("Content-Type", ""):
-            raise ValueError("Invalid response (not JSON)")
-        return r.json()
 
     try:
-        data = _fetch()
-    except Exception:
-        # 🔁 Force cookie refresh once
-        session.get("https://www.nseindia.com", timeout=10)
-        data = _fetch()
+        r = session.get(url)
 
-    spot = data["records"]["underlyingValue"]
+        if "application/json" not in r.headers.get("Content-Type", ""):
+            raise Exception("Blocked")
+
+        data = r.json()
+
+    except Exception:
+        # Refresh cookies once
+        session.get("https://www.nseindia.com")
+        time.sleep(1)
+
+        r = session.get(url)
+        if "application/json" not in r.headers.get("Content-Type", ""):
+            return pd.DataFrame()
+
+        data = r.json()
 
     rows = []
-    ce_oi = pe_oi = 0
-    ce_vol = pe_vol = 0
 
-    for item in data["records"]["data"]:
-        if item.get("expiryDate") != EXPIRY:
-            continue
+    records = data.get("records", {}).get("data", [])
 
-        ce = item.get("CE", {})
-        pe = item.get("PE", {})
-
-        ce_oi += ce.get("openInterest", 0)
-        pe_oi += pe.get("openInterest", 0)
-        ce_vol += ce.get("totalTradedVolume", 0)
-        pe_vol += pe.get("totalTradedVolume", 0)
+    for item in records:
+        ce = item.get("CE") or {}
+        pe = item.get("PE") or {}
 
         rows.append({
-            "Strike": item["strikePrice"],
-            "CE LTP": ce.get("lastPrice"),
-            "CE OI": ce.get("openInterest"),
-            "CE Volume": ce.get("totalTradedVolume"),
-            "PE LTP": pe.get("lastPrice"),
-            "PE OI": pe.get("openInterest"),
-            "PE Volume": pe.get("totalTradedVolume"),
+            "Strike": item.get("strikePrice"),
+            "CE_OI": ce.get("openInterest"),
+            "CE_Volume": ce.get("totalTradedVolume"),
+            "CE_LTP": ce.get("lastPrice"),
+            "PE_OI": pe.get("openInterest"),
+            "PE_Volume": pe.get("totalTradedVolume"),
+            "PE_LTP": pe.get("lastPrice"),
         })
 
-    df = pd.DataFrame(rows).sort_values("Strike")
+    df = pd.DataFrame(rows)
 
-    pcr_oi = round(pe_oi / ce_oi, 2) if ce_oi else 0
-    pcr_vol = round(pe_vol / ce_vol, 2) if ce_vol else 0
+    if df.empty or "Strike" not in df.columns:
+        return pd.DataFrame()
 
-    return spot, pcr_oi, pcr_vol, df
+    return df.sort_values("Strike")
 
 
-# --------------------------------
+# =============================
 # UI
-# --------------------------------
-st.title("📊 NIFTY Option Chain")
-st.write(f"**Expiry:** {EXPIRY}")
+# =============================
+st.title("📊 NIFTY Option Chain (NSE v3)")
 
-try:
-    spot, pcr_oi, pcr_vol, df = fetch_nifty_data()
+st.caption("Data source: NSE | Auto-refresh enabled")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("NIFTY Spot", spot)
-    c2.metric("Put / Call OI", pcr_oi)
-    c3.metric("Put / Call Volume", pcr_vol)
+for expiry in EXPIRIES:
+    st.subheader(f"Expiry: {expiry}")
+
+    df = fetch_nifty_option_chain(expiry)
+
+    if df.empty:
+        st.warning("No data available (NSE may be blocking temporarily).")
+    else:
+        st.dataframe(
+            df,
+            use_container_width=True,
+            height=600
+        )
 
     st.divider()
-    st.dataframe(df, use_container_width=True, height=600)
 
-except Exception as e:
-    st.warning(
-        "NSE temporarily blocked this request.\n\n"
-        "• This is common with NSE\n"
-        "• Please wait 1–2 minutes and refresh\n"
-        "• Works best when run locally"
-    )
-    st.stop()
 
+# =============================
+# Auto Refresh
+# =============================
 st.caption(f"Auto refresh every {REFRESH_SECONDS} seconds")
 
 time.sleep(REFRESH_SECONDS)
